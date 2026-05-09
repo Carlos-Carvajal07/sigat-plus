@@ -2399,6 +2399,99 @@ tbody td {
 // ══════════════════════════════════════════════════════════════════
 
 // ─── USERS / AUTH ───
+
+// ══════════════════════════════════════════════════════════
+// API LAYER — conecta con https://sigat-api.onrender.com
+// ══════════════════════════════════════════════════════════
+const API_URL = 'https://sigat-api.onrender.com';
+
+function getToken()  { return localStorage.getItem('sigat_token'); }
+function getUser()   { return JSON.parse(localStorage.getItem('sigat_user') || 'null'); }
+function setAuth(token, user) {
+  localStorage.setItem('sigat_token', token);
+  localStorage.setItem('sigat_user', JSON.stringify(user));
+}
+function clearAuth() {
+  localStorage.removeItem('sigat_token');
+  localStorage.removeItem('sigat_user');
+}
+
+async function api(method, path, body) {
+  const token = getToken();
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  try {
+    const res = await fetch(API_URL + path, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    // Token expirado — intentar refresh
+    if (res.status === 401) {
+      const data = await res.json().catch(()=>({}));
+      if (data.code === 'TOKEN_EXPIRED') {
+        const refreshed = await tryRefresh();
+        if (refreshed) return api(method, path, body);
+      }
+      clearAuth();
+      location.reload();
+      return null;
+    }
+    if (!res.ok) {
+      const err = await res.json().catch(()=>({ error: 'Error desconocido' }));
+      throw new Error(err.error || 'Error ' + res.status);
+    }
+    return res.json();
+  } catch(e) {
+    if (e.message.includes('fetch')) {
+      showToast('⚠️ Sin conexión con el servidor. Verifica tu internet.');
+    } else {
+      showToast('❌ ' + e.message);
+    }
+    throw e;
+  }
+}
+
+async function tryRefresh() {
+  try {
+    const refresh = localStorage.getItem('sigat_refresh');
+    if (!refresh) return false;
+    const res = await fetch(API_URL + '/api/auth/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken: refresh }),
+    });
+    if (!res.ok) return false;
+    const data = await res.json();
+    localStorage.setItem('sigat_token', data.token);
+    return true;
+  } catch { return false; }
+}
+
+// Loading overlay
+function showLoading(msg) {
+  let el = document.getElementById('loadingOverlay');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'loadingOverlay';
+    el.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;';
+    el.innerHTML = '<div style="width:40px;height:40px;border:3px solid var(--accent);border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite"></div><div style="color:#fff;font-size:14px" id="loadingMsg"></div>';
+    document.body.appendChild(el);
+    if (!document.getElementById('spinStyle')) {
+      const s = document.createElement('style');
+      s.id = 'spinStyle';
+      s.textContent = '@keyframes spin{to{transform:rotate(360deg)}}';
+      document.head.appendChild(s);
+    }
+  }
+  document.getElementById('loadingMsg').textContent = msg || 'Cargando...';
+  el.style.display = 'flex';
+}
+function hideLoading() {
+  const el = document.getElementById('loadingOverlay');
+  if (el) el.style.display = 'none';
+}
+
 const USERS = [
   { id:1, login:'admin', pass:'Admin2024!', nombre:'Administrador Sistema', rol:'Administrador', area:'Dirección', correo:'admin@institucion.cl', carrera:'', estado:'Activo', ultimoAcceso: new Date().toLocaleString('es-CL') },
   { id:2, login:'ti_user', pass:'TI2024!', nombre:'Carlos Muñoz', rol:'Supervisor', area:'Tecnología', correo:'cmuñoz@institucion.cl', carrera:'Ingeniería Informática', estado:'Activo', ultimoAcceso:'2025-01-15 09:30' },
@@ -2506,34 +2599,55 @@ const navConfig = {
 };
 
 // ─── AUTH ───
-function doLogin() {
+async function doLogin() {
   const u = document.getElementById('loginUser').value.trim();
   const p = document.getElementById('loginPass').value.trim();
-  const user = USERS.find(x => x.login === u && x.pass === p && x.estado === 'Activo');
-  if (!user) { alert('Credenciales incorrectas o usuario inactivo'); return; }
-  currentUser = user;
-  user.ultimoAcceso = new Date().toLocaleString('es-CL');
-  document.getElementById('loginScreen').style.display = 'none';
-  document.getElementById('app').classList.add('visible');
-  document.getElementById('userName').textContent = user.nombre;
-  document.getElementById('userRole').textContent = user.rol;
-  document.getElementById('userAvatar').textContent = user.nombre[0].toUpperCase();
-  buildNav(user.rol);
-  populateSelects();
-  renderAll();
-  setDate();
-  // Default page
-  const defaultPage = user.rol === 'Embajador' ? 'embajador-portal' : 'dashboard';
-  navigateTo(defaultPage);
-  logAudit('LOGIN', 'Sistema', '', '', user.login);
+  if (!u || !p) { alert('Ingresa usuario y contraseña'); return; }
+
+  showLoading('Iniciando sesión...');
+  try {
+    const data = await fetch(API_URL + '/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: u, password: p }),
+    }).then(async res => {
+      if (!res.ok) { const e = await res.json(); throw new Error(e.error || 'Error'); }
+      return res.json();
+    });
+
+    setAuth(data.token, data.user);
+    localStorage.setItem('sigat_refresh', data.refreshToken);
+    currentUser = data.user;
+
+    document.getElementById('loginScreen').style.display = 'none';
+    document.getElementById('app').classList.add('visible');
+    document.getElementById('userName').textContent = data.user.nombre;
+    document.getElementById('userRole').textContent = data.user.rol;
+    document.getElementById('userAvatar').textContent = data.user.nombre[0].toUpperCase();
+    buildNav(data.user.rol);
+    setDate();
+    await loadAllData();
+    populateSelects();
+    renderAll();
+    const defaultPage = data.user.rol === 'Embajador' ? 'embajador-portal' : 'dashboard';
+    navigateTo(defaultPage);
+  } catch(e) {
+    alert('Error al iniciar sesión: ' + e.message);
+  } finally {
+    hideLoading();
+  }
 }
 
-function doLogout() {
+async function doLogout() {
+  try { await api('POST', '/api/auth/logout'); } catch {}
+  clearAuth();
+  localStorage.removeItem('sigat_refresh');
   currentUser = null;
+  tickets = []; actividades = []; actividadesEmb = []; usuarios = [];
   document.getElementById('loginScreen').style.display = 'flex';
   document.getElementById('app').classList.remove('visible');
-  document.getElementById('loginUser').value = 'admin';
-  document.getElementById('loginPass').value = 'Admin2024!';
+  document.getElementById('loginUser').value = '';
+  document.getElementById('loginPass').value = '';
 }
 
 function setDate() {
@@ -2592,6 +2706,10 @@ function navigateTo(page) {
   if(page==='reportes') populateReporteSelects();
   if(page==='calendario') { renderCalendarioInstitucional(); renderProximosEventos(); }
   if(page==='disponibilidad') { renderDisponibilidadPage(); }
+  // Refresh live data on key page visits
+  if(['tickets','actividades','embajadores','usuarios'].includes(page)) {
+    refreshPageData(page);
+  }
 }
 
 // ─── POPULATE SELECTS ───
@@ -2659,6 +2777,100 @@ function populateReporteSelects() {
 }
 
 // ─── RENDER ALL ───
+async function loadAllData() {
+  showLoading('Cargando datos...');
+  try {
+    // Load all data from API in parallel
+    const [tRes, aRes, eRes, uRes, audRes] = await Promise.all([
+      api('GET', '/api/tickets').catch(()=>({ tickets:[] })),
+      api('GET', '/api/actividades').catch(()=>({ actividades:[] })),
+      api('GET', '/api/embajadores').catch(()=>({ actividades:[] })),
+      api('GET', '/api/usuarios').catch(()=>({ usuarios:[] })),
+      api('GET', '/api/auditoria').catch(()=>({ auditoria:[] })),
+    ]);
+
+    if (tRes?.tickets)   tickets   = tRes.tickets.map(normalizeTicket);
+    if (aRes?.actividades) actividades = aRes.actividades.map(normalizeActividad);
+    if (eRes?.actividades) actividadesEmb = eRes.actividades.map(normalizeEmbActividad);
+    if (uRes?.usuarios)  { usuarios = uRes.usuarios; }
+    if (audRes?.auditoria) auditoria = audRes.auditoria.map(a => ({
+      id: a.id,
+      fecha: new Date(a.created_at).toLocaleString('es-CL'),
+      usuario: a.usuario_login || a.usuario_id,
+      accion: a.accion,
+      modulo: a.modulo,
+      campo: a.campo,
+      anterior: a.valor_anterior || '',
+      nuevo: a.valor_nuevo || '',
+    }));
+  } catch(e) {
+    console.error('Error loading data:', e.message);
+  } finally {
+    hideLoading();
+  }
+}
+
+// Normalize API responses to match frontend model
+function normalizeTicket(t) {
+  return {
+    id: t.id, codigo: t.codigo,
+    fechaCreacion: t.fecha_creacion, fechaFin: t.fecha_fin,
+    fechaComprometida: t.fecha_comprometida, fechaCierre: t.fecha_cierre,
+    tipoSol: t.tipo_sol, nombreSol: t.nombre_sol, unidadSol: t.unidad_sol,
+    contactoSol: t.contacto_sol, canal: t.canal, tipoReq: t.tipo_req,
+    descripcion: t.descripcion, prioridad: t.prioridad, estado: t.estado,
+    responsable: t.responsable_nombre || t.responsable_id,
+    duracion: parseFloat(t.duracion)||0, tiempoOptimo: parseFloat(t.tiempo_optimo)||0,
+    comentarioInterno: t.comentario_interno,
+    sla_cumplido: t.sla_cumplido,
+    historial: [],
+    _id: t.id,
+  };
+}
+function normalizeActividad(a) {
+  return {
+    id: a.id, titulo: a.titulo, descripcion: a.descripcion,
+    area: a.area, tipo: a.tipo, subtipo: a.subtipo||'',
+    responsable: a.responsable, fecha: a.fecha,
+    horaInicio: a.hora_inicio, horaFin: a.hora_fin,
+    duracion: parseFloat(a.duracion)||0,
+    prioridad: a.prioridad, estado: a.estado,
+    tipoSol: a.tipo_sol, nombreSol: a.nombre_sol,
+    unidadSol: a.unidad_sol, contactoSol: a.contacto_sol,
+    descSol: a.desc_sol, ticketId: a.ticket_id,
+    meta: a.meta||'', observaciones: a.observaciones||'',
+    objetivo: a.objetivo||'', unidadParticipante: a.unidad_participante||'',
+    acuerdos: a.acuerdos||'', responsablesComp: a.responsables_comp||'',
+    fechaSeguimiento: a.fecha_seguimiento||'',
+    estadoCumplimiento: a.estado_cumplimiento||'',
+    links: a.links||'', evidencias: [],
+    createdBy: a.created_by, createdAt: a.created_at,
+  };
+}
+function normalizeEmbActividad(a) {
+  return {
+    id: a.id, fecha: a.fecha, actividad: a.actividad,
+    establecimiento: a.establecimiento, contacto: a.contacto||'',
+    cargo: a.cargo||'', ciudad: a.ciudad||'', comuna: a.comuna||'',
+    horario: a.horario||'', horas: parseFloat(a.horas)||0,
+    telefono: a.telefono||'', correo: a.correo||'',
+    lugar: a.lugar||'', estado: a.estado,
+    comentario: a.comentario||'',
+    embajadores: Array.isArray(a.embajadores) ? a.embajadores.map(e => ({
+      id: e.id, nombre: e.nombre, respuesta: e.respuesta,
+      dispEstado: e.dispEstado, asignacionManual: e.asignacionManual,
+      motivoManual: e.motivoManual,
+    })) : [],
+    cierre: a.traslado ? {
+      traslado: a.traslado, alimentacion: a.alimentacion,
+      numEstudiantes: a.num_estudiantes, cursos: a.cursos,
+      carreras: a.carreras, observaciones: a.observaciones_cierre,
+      compromisos: a.compromisos, evaluacion: a.evaluacion,
+      cierradoPor: a.cierre_por, fechaCierre: a.fecha_cierre,
+    } : null,
+  };
+}
+
 function renderAll() {
   renderTickets();
   renderActividades();
@@ -2745,16 +2957,17 @@ function getBadgeEstadoEmb(e) {
 
 
 
-function eliminarTicket(id) {
+async function eliminarTicket(id) {
   if(!confirm('¿Eliminar este ticket? Esta acción no se puede deshacer.')) return;
-  const t = tickets.find(x=>x.id===id);
-  if(t) {
-    logAudit('ELIMINAR', 'Ticket', t.codigo, '', '');
+  showLoading('Eliminando...');
+  try {
+    await api('DELETE', '/api/tickets/'+id);
     tickets = tickets.filter(x=>x.id!==id);
     renderTickets();
     renderDashboard();
     showToast('Ticket eliminado');
-  }
+  } catch(e) { showToast('Error: '+e.message); }
+  finally { hideLoading(); }
 }
 
 
@@ -3029,6 +3242,36 @@ function guardarActEmb() {
     showToast('Actividad creada. Notificaciones enviadas ✓');
   }
   closeModal('modalNuevaActEmb');
+  showLoading('Guardando actividad...');
+  try {
+    const payload = {
+      fecha: document.getElementById('embFecha').value,
+      actividad: document.getElementById('embActividad').value.trim(),
+      establecimiento: document.getElementById('embEstablecimiento').value.trim(),
+      contacto: document.getElementById('embContacto').value,
+      cargo: document.getElementById('embCargo').value,
+      ciudad: document.getElementById('embCiudad').value,
+      comuna: document.getElementById('embComuna').value,
+      horario: document.getElementById('embHorario').value,
+      horas: parseFloat(document.getElementById('embHoras').value)||0,
+      telefono: document.getElementById('embTelefono').value,
+      correo: document.getElementById('embCorreo').value,
+      lugar: document.getElementById('embLugar').value,
+      estado, embajador_ids: embList.map(e=>e.id),
+    };
+    if(cierreData) payload.cierre = cierreData;
+    if(editingId.embajador) {
+      const data = await api('PUT','/api/embajadores/'+editingId.embajador, payload);
+      if(data?.actividad){ const i=actividadesEmb.findIndex(x=>x.id===editingId.embajador); if(i>=0) actividadesEmb[i]=normalizeEmbActividad(data.actividad); actividadesEmb[i].embajadores=embList; }
+      editingId.embajador = null;
+      document.getElementById('modalEmbTitle').textContent = '🎓 Nueva Actividad de Embajador';
+      showToast('Actividad actualizada ✓');
+    } else {
+      const data = await api('POST','/api/embajadores', payload);
+      if(data?.actividad){ const ne=normalizeEmbActividad(data.actividad); ne.embajadores=embList; actividadesEmb.push(ne); showToast('Actividad creada ✓'); }
+    }
+  } catch(e) { showToast('Error: '+e.message); }
+  finally { hideLoading(); }
   renderEmbajadores();
   renderCalendar();
   renderDashboard();
@@ -3135,21 +3378,23 @@ function renderEmbajadorPortal() {
   renderCalendarPortal();
 }
 
-function responderActEmb(actId, respuesta) {
+async function responderActEmb(actId, respuesta) {
   if(!currentUser) return;
-  const a = actividadesEmb.find(x=>x.id===actId);
-  if(!a) return;
-  const emb = a.embajadores.find(e=>e.id===currentUser.id);
-  if(!emb) return;
-  emb.respuesta = respuesta;
-  if(respuesta === 'aceptada') {
-    if(a.estado === 'Programada' || a.estado === 'En coordinación') a.estado = 'Confirmada';
-  }
-  logAudit(respuesta.toUpperCase(), 'Embajadores', a.actividad, '', currentUser.nombre);
-  showToast(respuesta === 'aceptada' ? 'Actividad aceptada ✓' : 'Actividad rechazada');
-  renderEmbajadorPortal();
-  renderEmbajadores();
-  renderDashboard();
+  showLoading('Guardando respuesta...');
+  try {
+    await api('PUT', '/api/embajadores/'+actId+'/respuesta', { respuesta });
+    const a = actividadesEmb.find(x=>x.id===actId);
+    if(a) {
+      const emb = a.embajadores.find(e=>e.id===currentUser.id);
+      if(emb) emb.respuesta = respuesta;
+      if(respuesta==='aceptada' && ['Programada','En coordinación'].includes(a.estado)) a.estado='Confirmada';
+    }
+    showToast(respuesta==='aceptada' ? 'Actividad aceptada ✓' : 'Actividad rechazada');
+    renderEmbajadorPortal();
+    renderEmbajadores();
+    renderDashboard();
+  } catch(e) { showToast('Error: '+e.message); }
+  finally { hideLoading(); }
 }
 
 function openComentario(actId) {
@@ -3161,15 +3406,20 @@ function openComentario(actId) {
   openModal('modalComentarioEmb');
 }
 
-function guardarComentario() {
-  const a = actividadesEmb.find(x=>x.id===currentComentarioEmbId);
-  if(!a) return;
-  a.comentario = document.getElementById('comentarioTexto').value.trim();
-  logAudit('COMENTAR', 'Embajadores', a.actividad, '', currentUser.nombre);
-  closeModal('modalComentarioEmb');
-  renderEmbajadorPortal();
-  renderDashboard();
-  showToast('Comentario guardado ✓');
+async function guardarComentario() {
+  const comentario = document.getElementById('comentarioTexto').value.trim();
+  if(!comentario) { alert('Escribe un comentario'); return; }
+  showLoading('Guardando comentario...');
+  try {
+    await api('POST', '/api/embajadores/'+currentComentarioEmbId+'/comentario', { comentario });
+    const a = actividadesEmb.find(x=>x.id===currentComentarioEmbId);
+    if(a) a.comentario = comentario;
+    closeModal('modalComentarioEmb');
+    renderEmbajadorPortal();
+    renderDashboard();
+    showToast('Comentario guardado ✓');
+  } catch(e) { showToast('Error: '+e.message); }
+  finally { hideLoading(); }
 }
 
 // ─── CALENDAR ───
@@ -3280,20 +3530,19 @@ function editUsuario(id) {
   openModal('modalNuevoUsuario');
 }
 
-function eliminarUsuario(id) {
-  if(id === currentUser.id) { alert('No puedes eliminar tu propio usuario'); return; }
-  if(!confirm('¿Eliminar este usuario? Esta acción no se puede deshacer.')) return;
-  const u = usuarios.find(x=>x.id===id);
-  if(u) {
-    logAudit('ELIMINAR', 'Usuario', u.login, '', '');
-    usuarios = usuarios.filter(x=>x.id!==id);
-    // Also remove from USERS array to prevent login
-    const idx = USERS.findIndex(x=>x.id===id);
-    if(idx>=0) USERS.splice(idx,1);
+async function eliminarUsuario(id) {
+  if(id === currentUser.id) { alert('No puedes eliminarte a ti mismo'); return; }
+  if(!confirm('¿Desactivar este usuario?')) return;
+  showLoading('Procesando...');
+  try {
+    await api('DELETE', '/api/usuarios/'+id);
+    const idx = usuarios.findIndex(x=>x.id===id);
+    if(idx>=0) usuarios[idx].estado = 'Inactivo';
     renderUsuarios();
     populateSelects();
-    showToast('Usuario eliminado');
-  }
+    showToast('Usuario desactivado');
+  } catch(e) { showToast('Error: '+e.message); }
+  finally { hideLoading(); }
 }
 
 function guardarUsuario() {
@@ -3334,6 +3583,30 @@ function guardarUsuario() {
     showToast('Usuario creado ✓');
   }
   closeModal('modalNuevoUsuario');
+  showLoading('Guardando usuario...');
+  try {
+    const payload = {
+      login: document.getElementById('usuLogin').value.trim(),
+      password: document.getElementById('usuPassword').value,
+      nombre: document.getElementById('usuNombre').value.trim(),
+      rol: document.getElementById('usuRol').value,
+      area: document.getElementById('usuArea').value,
+      correo: document.getElementById('usuCorreo').value,
+      carrera: document.getElementById('usuCarrera').value,
+      estado: document.getElementById('usuEstado').value,
+    };
+    if(editingId.usuario) {
+      const data = await api('PUT','/api/usuarios/'+editingId.usuario, payload);
+      if(data?.usuario){ const i=usuarios.findIndex(u=>u.id===editingId.usuario); if(i>=0) usuarios[i]={...usuarios[i],...data.usuario}; }
+      editingId.usuario = null;
+      document.getElementById('modalUsuarioTitle').textContent = '👤 Nuevo Usuario';
+      showToast('Usuario actualizado ✓');
+    } else {
+      const data = await api('POST','/api/usuarios', payload);
+      if(data?.usuario){ usuarios.push(data.usuario); showToast('Usuario creado ✓'); }
+    }
+  } catch(e) { showToast('Error: '+e.message); }
+  finally { hideLoading(); }
   renderUsuarios();
   populateSelects();
 }
@@ -3348,7 +3621,6 @@ function logAudit(accion, modulo, campo, anterior, nuevo, obs='') {
     accion, modulo, campo,
     anterior, nuevo, observaciones: obs
   });
-  // Trigger alert check
   checkAndShowAlerts();
 }
 
@@ -4266,6 +4538,48 @@ function guardarActividad() {
   }
   closeModal('modalNuevaActividad');
   document.getElementById('modalActTitle').textContent = '📋 Nueva Actividad';
+  showLoading('Guardando actividad...');
+  try {
+    const payload = {
+      titulo: document.getElementById('actTitulo').value.trim(),
+      descripcion: document.getElementById('actDescripcion').value,
+      area: document.getElementById('actArea').value,
+      tipo: document.getElementById('actTipo').value,
+      subtipo: document.getElementById('actSubtipo').value,
+      responsable: document.getElementById('actResponsable').value,
+      fecha: document.getElementById('actFecha').value,
+      hora_inicio: document.getElementById('actHoraInicio').value,
+      hora_fin: document.getElementById('actHoraFin').value,
+      duracion: dur,
+      prioridad: document.getElementById('actPrioridad').value,
+      estado: document.getElementById('actEstado').value,
+      tipo_sol: document.getElementById('actTipoSol').value,
+      nombre_sol: document.getElementById('actNombreSol').value.trim(),
+      unidad_sol: document.getElementById('actUnidadSol').value,
+      contacto_sol: document.getElementById('actContactoSol').value,
+      desc_sol: document.getElementById('actDescSol').value,
+      ticket_id: document.getElementById('actTicket').value||null,
+      meta: document.getElementById('actMeta').value,
+      observaciones: document.getElementById('actObservaciones').value,
+      objetivo: document.getElementById('actObjetivo')?.value||'',
+      unidad_participante: document.getElementById('actUnidadParticipante')?.value||'',
+      acuerdos: document.getElementById('actAcuerdos')?.value||'',
+      responsables_comp: document.getElementById('actResponsablesComp')?.value||'',
+      fecha_seguimiento: document.getElementById('actFechaSeguimiento')?.value||null,
+      estado_cumplimiento: document.getElementById('actEstadoCumplimiento')?.value||'',
+      links: document.getElementById('actLinks')?.value||'',
+    };
+    if(editingId.actividad) {
+      const data = await api('PUT','/api/actividades/'+editingId.actividad, payload);
+      if(data?.actividad){ const i=actividades.findIndex(x=>x.id===editingId.actividad); if(i>=0) actividades[i]=normalizeActividad(data.actividad); }
+      editingId.actividad = null; currentEditActId = null;
+      showToast('Actividad actualizada ✓');
+    } else {
+      const data = await api('POST','/api/actividades', payload);
+      if(data?.actividad){ actividades.push(normalizeActividad(data.actividad)); showToast('Actividad creada ✓'); }
+    }
+  } catch(e) { showToast('Error: '+e.message); }
+  finally { hideLoading(); }
   renderActividades();
   renderDashboard();
 }
@@ -4443,6 +4757,38 @@ function guardarTicket() {
     showToast('Ticket ' + codigo + ' creado ✓');
   }
   closeModal('modalNuevoTicket');
+  // API save
+  showLoading('Guardando...');
+  try {
+    const payload = {
+      tipo_sol: document.getElementById('ticketTipoSol').value,
+      nombre_sol: document.getElementById('ticketNombreSol').value.trim(),
+      unidad_sol: document.getElementById('ticketUnidadSol').value,
+      contacto_sol: document.getElementById('ticketContactoSol').value,
+      canal: document.getElementById('ticketCanal').value,
+      tipo_req: document.getElementById('ticketTipoReq').value,
+      descripcion: document.getElementById('ticketDescripcion').value.trim(),
+      prioridad: document.getElementById('ticketPrioridad').value,
+      estado: document.getElementById('ticketEstado').value,
+      responsable_id: null,
+      fecha_fin: document.getElementById('ticketFechaFin').value || null,
+      fecha_comprometida: document.getElementById('ticketFechaComprometida')?.value || null,
+      duracion: parseFloat(document.getElementById('ticketDuracion').value)||0,
+      tiempo_optimo: parseFloat(document.getElementById('ticketTiempoOptimo').value)||0,
+      comentario_interno: document.getElementById('ticketComentarioInterno')?.value || '',
+    };
+    if(editingId.ticket) {
+      const data = await api('PUT', '/api/tickets/'+editingId.ticket, payload);
+      if(data?.ticket) { const i=tickets.findIndex(t=>t.id===editingId.ticket); if(i>=0) tickets[i]=normalizeTicket(data.ticket); }
+      editingId.ticket = null;
+      showToast('Ticket actualizado ✓');
+    } else {
+      const data = await api('POST', '/api/tickets', payload);
+      if(data?.ticket) { tickets.unshift(normalizeTicket(data.ticket)); showToast(data.ticket.codigo+' creado ✓'); }
+    }
+    document.getElementById('modalTicketTitle').textContent = '🎟️ Nuevo Ticket de Soporte';
+  } catch(e) { showToast('Error: '+e.message); }
+  finally { hideLoading(); }
   populateSelects();
   renderTickets();
   renderDashboard();
@@ -5551,11 +5897,66 @@ function exportReporteDisponibilidad() {
   showToast('Reporte exportado ✓');
 }
 
+// ─── REFRESH PER PAGE ───
+async function refreshPageData(page) {
+  try {
+    if (page === 'tickets') {
+      const data = await api('GET', '/api/tickets').catch(()=>null);
+      if (data?.tickets) { tickets = data.tickets.map(normalizeTicket); renderTickets(); }
+    }
+    if (page === 'actividades') {
+      const data = await api('GET', '/api/actividades').catch(()=>null);
+      if (data?.actividades) { actividades = data.actividades.map(normalizeActividad); renderActividades(); }
+    }
+    if (page === 'embajadores') {
+      const data = await api('GET', '/api/embajadores').catch(()=>null);
+      if (data?.actividades) { actividadesEmb = data.actividades.map(normalizeEmbActividad); renderEmbajadores(); }
+    }
+    if (page === 'usuarios') {
+      const data = await api('GET', '/api/usuarios').catch(()=>null);
+      if (data?.usuarios) { usuarios = data.usuarios; renderUsuarios(); }
+    }
+  } catch(e) { console.warn('refreshPageData error:', e.message); }
+}
+
 // ─── INIT ───
-window.addEventListener('load', () => {
+window.addEventListener('load', async () => {
   setDate();
   document.getElementById('loginUser').addEventListener('keypress', e => { if(e.key==='Enter') doLogin(); });
   document.getElementById('loginPass').addEventListener('keypress', e => { if(e.key==='Enter') doLogin(); });
+
+  // Auto-restore session from localStorage
+  const savedToken = getToken();
+  const savedUser  = getUser();
+  if (savedToken && savedUser) {
+    showLoading('Restaurando sesión...');
+    try {
+      // Verify token is still valid
+      const res = await fetch(API_URL + '/api/usuarios', {
+        headers: { 'Authorization': 'Bearer ' + savedToken }
+      });
+      if (res.ok) {
+        currentUser = savedUser;
+        document.getElementById('loginScreen').style.display = 'none';
+        document.getElementById('app').classList.add('visible');
+        document.getElementById('userName').textContent = savedUser.nombre;
+        document.getElementById('userRole').textContent = savedUser.rol;
+        document.getElementById('userAvatar').textContent = savedUser.nombre[0].toUpperCase();
+        buildNav(savedUser.rol);
+        await loadAllData();
+        populateSelects();
+        renderAll();
+        const defaultPage = savedUser.rol === 'Embajador' ? 'embajador-portal' : 'dashboard';
+        navigateTo(defaultPage);
+      } else {
+        clearAuth();
+      }
+    } catch(e) {
+      clearAuth();
+    } finally {
+      hideLoading();
+    }
+  }
   // File input preview (all file inputs)
   document.addEventListener('change', e => {
     const previewMap = {
