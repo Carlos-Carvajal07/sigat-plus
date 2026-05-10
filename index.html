@@ -2492,6 +2492,12 @@ function hideLoading() {
   if (el) el.style.display = 'none';
 }
 
+// ─── EARLY DECLARATIONS (prevent reference errors) ───
+// These are populated by the DISPONIBILIDAD module further below
+let embajadoresDisp = [];
+let disponibilidades = {};
+let asignacionesParticipacion = [];
+
 const USERS = [
   { id:1, login:'admin', pass:'Admin2024!', nombre:'Administrador Sistema', rol:'Administrador', area:'Dirección', correo:'admin@institucion.cl', carrera:'', estado:'Activo', ultimoAcceso: new Date().toLocaleString('es-CL') },
   { id:2, login:'ti_user', pass:'TI2024!', nombre:'Carlos Muñoz', rol:'Supervisor', area:'Tecnología', correo:'cmuñoz@institucion.cl', carrera:'Ingeniería Informática', estado:'Activo', ultimoAcceso:'2025-01-15 09:30' },
@@ -5222,7 +5228,9 @@ function exportReporteEmbajadorPDF() {
 // ══════════════════════════════════════════════════════════
 
 // ─── DATA MODEL ───
-let embajadoresDisp = [
+// Note: embajadoresDisp and disponibilidades declared at top of file
+// Here we populate them with initial data
+embajadoresDisp = [
   { id:101, nombre:'Valentina Rojas', carrera:'Psicología', correo:'vrojas@institucion.cl', telefono:'+56912345678', estado:'Activo', observaciones:'Disponible preferentemente mañanas', pdfHorario:'horario_vrojas_s1.pdf', pdfFecha:'2025-01-10', pdfVigente:true, createdAt:'2025-01-01' },
   { id:102, nombre:'Diego Fuentes', carrera:'Ingeniería Civil', correo:'dfuentes@institucion.cl', telefono:'+56987654321', estado:'Activo', observaciones:'Solo disponible tardes los martes y jueves', pdfHorario:null, pdfFecha:null, pdfVigente:false, createdAt:'2025-01-01' },
   { id:103, nombre:'Camila Torres', carrera:'Medicina', correo:'ctorres@institucion.cl', telefono:'+56911223344', estado:'Activo', observaciones:'', pdfHorario:'horario_ctorres_s1.pdf', pdfFecha:'2025-01-08', pdfVigente:true, createdAt:'2025-01-03' },
@@ -5231,7 +5239,8 @@ let embajadoresDisp = [
 ];
 
 // Disponibilidad estructurada: embajador_id → [{dia,horaInicio,horaFin,origen,fechaActualizacion}]
-let disponibilidades = {
+// Note: disponibilidades declared at top - populating initial data here
+disponibilidades = {
   101: [
     { dia:1, horaInicio:'08:00', horaFin:'13:00', origen:'confirmada', fechaAct:'2025-01-10' },
     { dia:3, horaInicio:'08:00', horaFin:'13:00', origen:'confirmada', fechaAct:'2025-01-10' },
@@ -5256,7 +5265,8 @@ let disponibilidades = {
 };
 
 // Asignaciones con estado de participación
-let asignacionesParticipacion = [];
+// Note: asignacionesParticipacion declared at top
+asignacionesParticipacion = [];
 
 let embDispEditingId = null;
 let currentActividadParaAsignar = null;
