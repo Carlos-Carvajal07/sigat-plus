@@ -3009,10 +3009,6 @@ function getBadgeEstadoAct(e) {
   const m = { 'Pendiente':'badge-yellow','En Proceso':'badge-blue','Completada':'badge-green' };
   return `<span class="badge ${m[e]||'badge-gray'}">${e}</span>`;
 }
-
-
-</script>
-<script>
 // ─── EMBAJADORES ───
 function renderEmbajadores(filtered) {
   const data = filtered || [...actividadesEmb].sort((a,b)=>a.actividad.localeCompare(b.actividad,'es'));
@@ -4023,8 +4019,6 @@ function showToast(msg) {
   document.body.appendChild(t);
   setTimeout(()=>{t.style.opacity='0';setTimeout(()=>t.remove(),300);},2500);
 }
-</script>
-<script>
 // ─── EXPORT FUNCTIONS ───
 function csvToWorksheet(headers, rows) {
   return [headers, ...rows].map(r => r.map(v => `"${String(v||'').replace(/"/g,'""')}"`).join(',')).join('\n');
